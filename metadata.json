@@ -1,0 +1,6 @@
+{
+  "name": "EPA Stormwater Management Model (SWMM)",
+  "description": "Interactive Web Stormwater Management Model (SWMM 5.2) solver, hydraulic routing engine, LID simulator, and network visualizer.",
+  "permissions": [],
+  "capabilities": []
+}
