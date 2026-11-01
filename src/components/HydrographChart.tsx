@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { SimulationResult, SWMMModel } from '../types/swmm';
 import { CloudRain, TrendingUp, Filter } from 'lucide-react';
 
@@ -9,6 +9,16 @@ interface HydrographChartProps {
   onSeekStep: (stepIndex: number) => void;
   selectedElement: { type: 'NODE' | 'LINK' | 'SUBCATCHMENT'; id: string } | null;
 }
+
+// Chart dimensions (fixed)
+const SVG_WIDTH = 850;
+const SVG_HEIGHT = 270;
+const PAD_LEFT = 55;
+const PAD_RIGHT = 50;
+const PAD_TOP = 30;
+const PAD_BOTTOM = 35;
+const PLOT_WIDTH = SVG_WIDTH - PAD_LEFT - PAD_RIGHT;
+const PLOT_HEIGHT = SVG_HEIGHT - PAD_TOP - PAD_BOTTOM;
 
 export const HydrographChart: React.FC<HydrographChartProps> = ({
   result,
@@ -21,66 +31,84 @@ export const HydrographChart: React.FC<HydrographChartProps> = ({
   const steps = result.steps;
   if (!steps || steps.length === 0) return null;
 
-  // Max flow for y-axis
-  let maxFlow = 0;
-  let maxRain = 0;
-  steps.forEach(s => {
-    if (s.totalRunoff > maxFlow) maxFlow = s.totalRunoff;
-    if (s.totalOutflow > maxFlow) maxFlow = s.totalOutflow;
-    if (s.rainfallRate > maxRain) maxRain = s.rainfallRate;
+  // ⚡ Bolt Optimization: Memoize scale calculations and SVG path generation.
+  // During simulation playback (updating currentStepIndex at up to ~50 FPS) or mouse hovering,
+  // recomputing maxFlow/maxRain, mapping across hundreds of steps, and building large SVG path
+  // strings on every tick creates noticeable GC pressure and frame stutter. Memoizing keyed on
+  // [steps, selectedElement?.type, selectedElement?.id] ensures this heavy work runs only when
+  // the simulation dataset or inspected element changes.
+  const { maxFlow, maxRain, runoffPath, outflowPath, selectedPath } = useMemo(() => {
+    let computedMaxFlow = 0;
+    let computedMaxRain = 0;
 
+    for (let i = 0; i < steps.length; i++) {
+      const s = steps[i];
+      if (s.totalRunoff > computedMaxFlow) computedMaxFlow = s.totalRunoff;
+      if (s.totalOutflow > computedMaxFlow) computedMaxFlow = s.totalOutflow;
+      if (s.rainfallRate > computedMaxRain) computedMaxRain = s.rainfallRate;
+
+      if (selectedElement?.type === 'LINK') {
+        const lf = s.linkResults[selectedElement.id]?.flow || 0;
+        if (lf > computedMaxFlow) computedMaxFlow = lf;
+      } else if (selectedElement?.type === 'NODE') {
+        const nf = s.nodeResults[selectedElement.id]?.inflow || 0;
+        if (nf > computedMaxFlow) computedMaxFlow = nf;
+      }
+    }
+
+    const flowBound = Math.max(5, Math.ceil(computedMaxFlow * 1.2));
+    const rainBound = Math.max(1, Math.ceil(computedMaxRain * 1.5));
+
+    const getXCoord = (idx: number) => PAD_LEFT + (idx / (steps.length - 1)) * PLOT_WIDTH;
+    const getYFlowCoord = (flow: number) => PAD_TOP + PLOT_HEIGHT - (flow / flowBound) * PLOT_HEIGHT;
+
+    // Runoff Path
+    const computedRunoffPath = steps
+      .map((s, idx) => `${idx === 0 ? 'M' : 'L'} ${getXCoord(idx)} ${getYFlowCoord(s.totalRunoff)}`)
+      .join(' ');
+
+    // Outflow Path
+    const computedOutflowPath = steps
+      .map((s, idx) => `${idx === 0 ? 'M' : 'L'} ${getXCoord(idx)} ${getYFlowCoord(s.totalOutflow)}`)
+      .join(' ');
+
+    // Selected element path
+    let computedSelectedPath = '';
     if (selectedElement?.type === 'LINK') {
-      const lf = s.linkResults[selectedElement.id]?.flow || 0;
-      if (lf > maxFlow) maxFlow = lf;
+      computedSelectedPath = steps
+        .map((s, idx) => `${idx === 0 ? 'M' : 'L'} ${getXCoord(idx)} ${getYFlowCoord(s.linkResults[selectedElement.id]?.flow || 0)}`)
+        .join(' ');
+    } else if (selectedElement?.type === 'NODE') {
+      computedSelectedPath = steps
+        .map((s, idx) => `${idx === 0 ? 'M' : 'L'} ${getXCoord(idx)} ${getYFlowCoord(s.nodeResults[selectedElement.id]?.inflow || 0)}`)
+        .join(' ');
+    } else if (selectedElement?.type === 'SUBCATCHMENT') {
+      computedSelectedPath = steps
+        .map((s, idx) => `${idx === 0 ? 'M' : 'L'} ${getXCoord(idx)} ${getYFlowCoord(s.subcatchmentResults[selectedElement.id]?.runoff || 0)}`)
+        .join(' ');
     }
-    if (selectedElement?.type === 'NODE') {
-      const nf = s.nodeResults[selectedElement.id]?.inflow || 0;
-      if (nf > maxFlow) maxFlow = nf;
-    }
-  });
 
-  maxFlow = Math.max(5, Math.ceil(maxFlow * 1.2));
-  maxRain = Math.max(1, Math.ceil(maxRain * 1.5));
+    return {
+      maxFlow: flowBound,
+      maxRain: rainBound,
+      runoffPath: computedRunoffPath,
+      outflowPath: computedOutflowPath,
+      selectedPath: computedSelectedPath,
+    };
+  }, [steps, selectedElement?.type, selectedElement?.id]);
 
-  // Chart dimensions
-  const svgWidth = 850;
-  const svgHeight = 270;
-  const padLeft = 55;
-  const padRight = 50;
-  const padTop = 30;
-  const padBottom = 35;
-  const plotWidth = svgWidth - padLeft - padRight;
-  const plotHeight = svgHeight - padTop - padBottom;
+  const svgWidth = SVG_WIDTH;
+  const svgHeight = SVG_HEIGHT;
+  const padLeft = PAD_LEFT;
+  const padRight = PAD_RIGHT;
+  const padTop = PAD_TOP;
+  const padBottom = PAD_BOTTOM;
+  const plotWidth = PLOT_WIDTH;
+  const plotHeight = PLOT_HEIGHT;
 
   const getX = (idx: number) => padLeft + (idx / (steps.length - 1)) * plotWidth;
   const getYFlow = (flow: number) => padTop + plotHeight - (flow / maxFlow) * plotHeight;
   const getYRain = (rain: number) => padTop + (rain / maxRain) * (plotHeight * 0.4); // top downward
-
-  // Runoff Path
-  const runoffPath = steps
-    .map((s, idx) => `${idx === 0 ? 'M' : 'L'} ${getX(idx)} ${getYFlow(s.totalRunoff)}`)
-    .join(' ');
-
-  // Outflow Path
-  const outflowPath = steps
-    .map((s, idx) => `${idx === 0 ? 'M' : 'L'} ${getX(idx)} ${getYFlow(s.totalOutflow)}`)
-    .join(' ');
-
-  // Selected element path
-  let selectedPath = '';
-  if (selectedElement?.type === 'LINK') {
-    selectedPath = steps
-      .map((s, idx) => `${idx === 0 ? 'M' : 'L'} ${getX(idx)} ${getYFlow(s.linkResults[selectedElement.id]?.flow || 0)}`)
-      .join(' ');
-  } else if (selectedElement?.type === 'NODE') {
-    selectedPath = steps
-      .map((s, idx) => `${idx === 0 ? 'M' : 'L'} ${getX(idx)} ${getYFlow(s.nodeResults[selectedElement.id]?.inflow || 0)}`)
-      .join(' ');
-  } else if (selectedElement?.type === 'SUBCATCHMENT') {
-    selectedPath = steps
-      .map((s, idx) => `${idx === 0 ? 'M' : 'L'} ${getX(idx)} ${getYFlow(s.subcatchmentResults[selectedElement.id]?.runoff || 0)}`)
-      .join(' ');
-  }
 
   // Active step marker position
   const activeX = getX(currentStepIndex);
