@@ -28,6 +28,15 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 
+const TABS = [
+  { id: 'network', label: 'Network & Profile', icon: Layers },
+  { id: 'hydrograph', label: 'Hydrographs', icon: TrendingUp },
+  { id: 'lid', label: 'LID Infrastructure', icon: Leaf },
+  { id: 'report', label: 'Summary Report', icon: Activity },
+  { id: 'sensitivity', label: 'What-If Testing', icon: Sliders },
+  { id: 'theory', label: 'Theory', icon: BookOpen },
+] as const;
+
 export function App() {
   const [selectedPresetKey, setSelectedPresetKey] = useState<string>('epaExample1');
   const [currentModel, setCurrentModel] = useState<SWMMModel>(PRESET_MODELS.epaExample1);
@@ -119,9 +128,9 @@ export function App() {
   const totalCatchmentArea = currentModel.subcatchments.reduce((sum, s) => sum + s.area, 0);
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col selection:bg-cyan-500/30">
+    <div className="min-h-screen bg-slate-950 bg-[radial-gradient(ellipse_at_top,rgba(6,182,212,0.08),transparent_60%)] text-slate-100 flex flex-col selection:bg-cyan-500/30">
       {/* Top Main Navigation Header */}
-      <header className="border-b border-slate-800 bg-slate-900/90 backdrop-blur-md sticky top-0 z-40">
+      <header className="border-b border-slate-800 bg-slate-900/90 backdrop-blur-md md:sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-4">
           {/* Logo & Title */}
           <div className="flex items-center gap-3">
@@ -176,58 +185,48 @@ export function App() {
         </div>
 
         {/* Top KPI Metrics Bar */}
-        <div className="border-t border-slate-800/80 bg-slate-950/60 px-4 sm:px-6 py-2">
-          <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-4 text-xs">
-            <div className="flex flex-wrap items-center gap-6">
-              <div>
-                <span className="text-slate-500">Catchment Area:</span>{' '}
-                <span className="font-mono font-semibold text-slate-200">
-                  {totalCatchmentArea.toFixed(1)} acres
-                </span>
-              </div>
-              <div>
-                <span className="text-slate-500">Peak Runoff:</span>{' '}
-                <span className="font-mono font-bold text-cyan-400">
-                  {simulationResult.summary.peakRunoffRate.toFixed(2)} cfs
-                </span>{' '}
-                <span className="text-[10px] text-slate-500 font-mono">
-                  (@ {simulationResult.summary.peakRunoffTime})
-                </span>
-              </div>
-              <div>
-                <span className="text-slate-500">Peak Outfall:</span>{' '}
-                <span className="font-mono font-bold text-emerald-400">
-                  {simulationResult.summary.peakOutflowRate.toFixed(2)} cfs
-                </span>
-              </div>
-              <div>
-                <span className="text-slate-500">Continuity Error:</span>{' '}
-                <span
-                  className={`font-mono font-semibold ${
-                    Math.abs(simulationResult.summary.continuity.routingContinuityError) < 1.0
-                      ? 'text-emerald-400'
-                      : 'text-amber-400'
-                  }`}
-                >
-                  {simulationResult.summary.continuity.routingContinuityError.toFixed(2)}%
-                </span>
-              </div>
-              {simulationResult.summary.floodedNodesCount > 0 && (
-                <div className="flex items-center gap-1 text-rose-400 font-bold bg-rose-950/40 px-2 py-0.5 rounded border border-rose-900/50">
-                  <AlertTriangle className="w-3.5 h-3.5" />
-                  <span>{simulationResult.summary.floodedNodesCount} Node(s) Surcharged</span>
+        <div className="border-t border-slate-800/80 bg-slate-950/60 px-4 sm:px-6 py-3">
+          <div className="max-w-7xl mx-auto grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2.5">
+            {[
+              { label: 'Catchment Area', value: `${totalCatchmentArea.toFixed(1)} ac`, color: 'text-slate-100', bar: 'bg-slate-500' },
+              {
+                label: 'Peak Runoff',
+                value: `${simulationResult.summary.peakRunoffRate.toFixed(2)} cfs`,
+                sub: `@ ${simulationResult.summary.peakRunoffTime}`,
+                color: 'text-cyan-300',
+                bar: 'bg-cyan-400',
+              },
+              { label: 'Peak Outfall', value: `${simulationResult.summary.peakOutflowRate.toFixed(2)} cfs`, color: 'text-emerald-300', bar: 'bg-emerald-400' },
+              {
+                label: 'Continuity Error',
+                value: `${simulationResult.summary.continuity.routingContinuityError.toFixed(2)}%`,
+                color: Math.abs(simulationResult.summary.continuity.routingContinuityError) < 1.0 ? 'text-emerald-300' : 'text-amber-300',
+                bar: Math.abs(simulationResult.summary.continuity.routingContinuityError) < 1.0 ? 'bg-emerald-400' : 'bg-amber-400',
+              },
+              {
+                label: 'Elapsed Time',
+                value: currentStep?.timeStr || '00:00',
+                sub: `/ ${String(simulationResult.durationHours).padStart(2, '0')}:00`,
+                color: 'text-cyan-300',
+                bar: 'bg-blue-500',
+              },
+            ].map(k => (
+              <div key={k.label} className="relative overflow-hidden rounded-lg border border-slate-800 bg-slate-900/70 pl-3.5 pr-3 py-2">
+                <span className={`absolute left-0 inset-y-0 w-1 ${k.bar}`} />
+                <div className="text-[10px] uppercase tracking-wider text-slate-500">{k.label}</div>
+                <div className="flex items-baseline gap-1.5">
+                  <span className={`font-mono font-bold text-base ${k.color}`}>{k.value}</span>
+                  {k.sub && <span className="text-[10px] text-slate-500 font-mono">{k.sub}</span>}
                 </div>
-              )}
-            </div>
-
-            {/* Current Step Readout */}
-            <div className="flex items-center gap-3 font-mono text-[11px]">
-              <span className="text-slate-400">Elapsed Time:</span>
-              <span className="bg-slate-900 border border-slate-800 px-2 py-0.5 rounded text-cyan-300 font-bold">
-                {currentStep?.timeStr || '00:00'} / {String(simulationResult.durationHours).padStart(2, '0')}:00
-              </span>
-            </div>
+              </div>
+            ))}
           </div>
+          {simulationResult.summary.floodedNodesCount > 0 && (
+            <div className="max-w-7xl mx-auto mt-2.5 inline-flex items-center gap-1.5 text-xs text-rose-300 font-semibold bg-rose-950/40 px-2.5 py-1 rounded-md border border-rose-900/50">
+              <AlertTriangle className="w-3.5 h-3.5" />
+              <span>{simulationResult.summary.floodedNodesCount} node(s) surcharged</span>
+            </div>
+          )}
         </div>
       </header>
 
@@ -304,77 +303,27 @@ export function App() {
         </div>
 
         {/* View Tabs */}
-        <div className="flex items-center gap-2 border-b border-slate-800 overflow-x-auto pb-1 text-xs font-medium">
-          <button
-            onClick={() => setActiveTab('network')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-t-lg transition border-b-2 ${
-              activeTab === 'network'
-                ? 'border-cyan-400 text-cyan-400 bg-slate-900/60 font-semibold'
-                : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-900/30'
-            }`}
-          >
-            <Layers className="w-4 h-4" />
-            <span>Network Map & Profile</span>
-          </button>
-          <button
-            onClick={() => setActiveTab('hydrograph')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-t-lg transition border-b-2 ${
-              activeTab === 'hydrograph'
-                ? 'border-cyan-400 text-cyan-400 bg-slate-900/60 font-semibold'
-                : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-900/30'
-            }`}
-          >
-            <TrendingUp className="w-4 h-4" />
-            <span>Hydrograph Curves</span>
-          </button>
-          <button
-            onClick={() => setActiveTab('lid')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-t-lg transition border-b-2 ${
-              activeTab === 'lid'
-                ? 'border-cyan-400 text-cyan-400 bg-slate-900/60 font-semibold'
-                : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-900/30'
-            }`}
-          >
-            <Leaf className="w-4 h-4" />
-            <span>LID Green Infrastructure</span>
-          </button>
-          <button
-            onClick={() => setActiveTab('report')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-t-lg transition border-b-2 ${
-              activeTab === 'report'
-                ? 'border-cyan-400 text-cyan-400 bg-slate-900/60 font-semibold'
-                : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-900/30'
-            }`}
-          >
-            <Activity className="w-4 h-4" />
-            <span>Status Summary Report</span>
-          </button>
-          <button
-            onClick={() => setActiveTab('sensitivity')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-t-lg transition border-b-2 ${
-              activeTab === 'sensitivity'
-                ? 'border-cyan-400 text-cyan-400 bg-slate-900/60 font-semibold'
-                : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-900/30'
-            }`}
-          >
-            <Sliders className="w-4 h-4" />
-            <span>What-If Stress Testing</span>
-          </button>
-          <button
-            onClick={() => setActiveTab('theory')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-t-lg transition border-b-2 ${
-              activeTab === 'theory'
-                ? 'border-cyan-400 text-cyan-400 bg-slate-900/60 font-semibold'
-                : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-900/30'
-            }`}
-          >
-            <BookOpen className="w-4 h-4" />
-            <span>Theory & Formulation</span>
-          </button>
+        <div role="tablist" className="flex items-center gap-1 border-b border-slate-800 overflow-x-auto text-xs font-medium [scrollbar-width:none]">
+          {TABS.map(({ id, label, icon: Icon }) => (
+            <button
+              key={id}
+              role="tab"
+              aria-selected={activeTab === id}
+              onClick={() => setActiveTab(id)}
+              className={`flex items-center gap-1.5 px-4 py-2.5 rounded-t-lg whitespace-nowrap shrink-0 transition border-b-2 -mb-px ${
+                activeTab === id
+                  ? 'border-cyan-400 text-cyan-300 bg-gradient-to-b from-cyan-500/10 to-transparent font-semibold'
+                  : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-900/40'
+              }`}
+            >
+              <Icon className="w-4 h-4" />
+              <span>{label}</span>
+            </button>
+          ))}
         </div>
 
         {/* Tab Content Display */}
-        <div className="space-y-4">
+        <div key={activeTab} className="space-y-4 animate-[fadeIn_.25s_ease-out]">
           {activeTab === 'network' && (
             <>
               <NetworkMap
