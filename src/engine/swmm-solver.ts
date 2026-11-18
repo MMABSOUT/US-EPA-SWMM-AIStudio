@@ -55,9 +55,19 @@ export function runSWMMSimulation(
   const totalSteps = Math.floor(durationHours / dtHours);
 
   // Rain lookup helper
+  const seriesByGage = new Map<string, typeof defaultTimeseries>();
+  function resolveSeries(gageId: string) {
+    let ts = seriesByGage.get(gageId);
+    if (!ts) {
+      const gage = model.rainGages.find(g => g.id === gageId) || model.rainGages[0];
+      ts = model.timeSeries.find(t => t.name === (gage?.seriesName || '')) || defaultTimeseries;
+      seriesByGage.set(gageId, ts);
+    }
+    return ts;
+  }
+  const rainCache = new Map<string, number>();
   function getRainRate(timeHr: number, gageId: string): number {
-    const gage = model.rainGages.find(g => g.id === gageId) || model.rainGages[0];
-    const ts = model.timeSeries.find(t => t.name === (gage?.seriesName || '')) || defaultTimeseries;
+    const ts = resolveSeries(gageId);
     if (!ts || ts.entries.length === 0) return 0;
 
     // Linear interpolation between entries
@@ -128,10 +138,11 @@ export function runSWMMSimulation(
 
   // Pre-calculate conduit full flow capacity using Manning's equation
   const conduitCapacities: { [id: string]: { qFull: number; aFull: number; vFull: number; dFull: number } } = {};
+  const nodeById = new Map(model.nodes.map(n => [n.id, n]));
   model.links.forEach(link => {
     if (link.type === 'CONDUIT') {
-      const fromNode = model.nodes.find(n => n.id === link.fromNode);
-      const toNode = model.nodes.find(n => n.id === link.toNode);
+      const fromNode = nodeById.get(link.fromNode);
+      const toNode = nodeById.get(link.toNode);
       const fromElev = fromNode ? fromNode.invertElev + link.inletOffset : 0;
       const toElev = toNode ? toNode.invertElev + link.outletOffset : 0;
       const drop = Math.max(0.001, fromElev - toElev);
@@ -163,6 +174,30 @@ export function runSWMMSimulation(
     }
   });
 
+  // Static per-run lookups (hoisted out of the time loop)
+  const lidFractionBase = new Map<string, number[]>();
+  model.subcatchments.forEach(sub => {
+    const effs = model.lidUsages.filter(u => u.subcatchmentId === sub.id).map(usage => {
+      const lidCtrl = model.lidControls.find(c => c.name === usage.lidControlName);
+      let efficiency = 0.65;
+      if (lidCtrl?.lidType === 'BC') efficiency = 0.80;
+      if (lidCtrl?.lidType === 'PP') efficiency = 0.70;
+      if (lidCtrl?.lidType === 'RB') efficiency = 0.50;
+      if (lidCtrl?.lidType === 'GR') efficiency = 0.60;
+      return (usage.fromImperv / 100.0) * efficiency;
+    });
+    lidFractionBase.set(sub.id, effs);
+  });
+  const outletCapacity = new Map<string, number>();
+  model.nodes.forEach(node => {
+    if (node.type !== 'JUNCTION') return;
+    outletCapacity.set(node.id, model.links.reduce((sum, l) => {
+      if (l.fromNode !== node.id) return sum;
+      const cap = conduitCapacities[l.id];
+      return sum + (cap ? cap.qFull : 10);
+    }, 0));
+  });
+
   // Time loop
   for (let stepIdx = 0; stepIdx <= totalSteps; stepIdx++) {
     const timeHours = stepIdx * dtHours;
@@ -181,8 +216,13 @@ export function runSWMMSimulation(
     model.nodes.forEach(n => { nodeInflows[n.id] = 0; });
 
     // 1. Hydrology Step: Subcatchments
+    rainCache.clear();
     model.subcatchments.forEach(sub => {
-      const rainRate = getRainRate(timeHours, sub.rainGageId);
+      let rainRate = rainCache.get(sub.rainGageId);
+      if (rainRate === undefined) {
+        rainRate = getRainRate(timeHours, sub.rainGageId);
+        rainCache.set(sub.rainGageId, rainRate);
+      }
       stepRainRate = Math.max(stepRainRate, rainRate);
 
       const adjustedImperv = Math.min(100, Math.max(0, sub.percentImperv * impervMult));
@@ -246,21 +286,11 @@ export function runSWMMSimulation(
       let subRunoff = runoffImpCfs + runoffPervCfs;
 
       // Check for LID Controls applied to this subcatchment
-      const lidUsages = model.lidUsages.filter(u => u.subcatchmentId === sub.id);
-      let lidRetentionFraction = 0;
-      if (lidUsages.length > 0) {
+      const lidEffs = lidFractionBase.get(sub.id)!;
+      if (lidEffs.length > 0) {
         // LID intercepts and retains a portion of impervious runoff
-        lidUsages.forEach(usage => {
-          const lidCtrl = model.lidControls.find(c => c.name === usage.lidControlName);
-          const lidCapturePct = usage.fromImperv / 100.0;
-          // Approximate retention efficiency based on LID type
-          let efficiency = 0.65;
-          if (lidCtrl?.lidType === 'BC') efficiency = 0.80; // Bioretention
-          if (lidCtrl?.lidType === 'PP') efficiency = 0.70; // Permeable Pavement
-          if (lidCtrl?.lidType === 'RB') efficiency = 0.50; // Rain Barrel
-          if (lidCtrl?.lidType === 'GR') efficiency = 0.60; // Green Roof
-          lidRetentionFraction += (fracImperv * lidCapturePct * efficiency);
-        });
+        let lidRetentionFraction = 0;
+        for (const e of lidEffs) lidRetentionFraction += fracImperv * e;
         subRunoff = Math.max(0, subRunoff * (1.0 - Math.min(0.85, lidRetentionFraction)));
       }
 
@@ -342,7 +372,7 @@ export function runSWMMSimulation(
         }
       } else if (link.type === 'ORIFICE') {
         // Orifice flow: Q = Cd * A * sqrt(2 * g * h)
-        const fromNode = model.nodes.find(n => n.id === link.fromNode);
+        const fromNode = nodeById.get(link.fromNode);
         const head = fromNode ? Math.max(0, nodeDepth[link.fromNode] - link.offset) : 0;
         const area = (Math.PI * Math.pow(link.geom1 * geomMult, 2)) / 4.0;
         linkFlow = link.dischargeCoeff * area * Math.sqrt(2 * 32.2 * head);
@@ -354,7 +384,7 @@ export function runSWMMSimulation(
         }
       } else if (link.type === 'WEIR') {
         // Weir flow: Q = Cw * L * h^(3/2)
-        const fromNode = model.nodes.find(n => n.id === link.fromNode);
+        const fromNode = nodeById.get(link.fromNode);
         const head = fromNode ? Math.max(0, nodeDepth[link.fromNode] - link.crestHeight) : 0;
         linkFlow = link.dischargeCoeff * (link.geom1 * geomMult) * Math.pow(head, 1.5);
         linkDepth = head;
@@ -404,11 +434,7 @@ export function runSWMMSimulation(
       } else if (node.type === 'JUNCTION') {
         // Junction stage & surcharge
         // Inflow drives depth up
-        const connectedLinks = model.links.filter(l => l.fromNode === node.id);
-        const totalOutletCapacity = connectedLinks.reduce((sum, l) => {
-          const cap = conduitCapacities[l.id];
-          return sum + (cap ? cap.qFull : 10);
-        }, 0);
+        const totalOutletCapacity = outletCapacity.get(node.id) ?? 0;
 
         if (inflow > totalOutletCapacity && totalOutletCapacity > 0) {
           depth = node.maxDepth + (inflow - totalOutletCapacity) * 0.15;
